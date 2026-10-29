@@ -172,18 +172,19 @@ async fn spawn(app: Router) -> String {
 
 struct Harness {
     proxy: String,
-    _upstream: String,
+    upstream: String,
 }
 
 async fn harness() -> Harness {
+    harness_with_root_page(true).await
+}
+
+async fn harness_with_root_page(root_page: bool) -> Harness {
     let upstream = spawn(Router::new().fallback(any(upstream))).await;
-    let config = Config::new(&upstream, PROXY_ORIGIN, "127.0.0.1:0").unwrap();
+    let config = Config::new(&upstream, PROXY_ORIGIN, "127.0.0.1:0", root_page).unwrap();
     let state = AppState::new(&config).unwrap();
     let proxy = spawn(router(Arc::clone(&state))).await;
-    Harness {
-        proxy,
-        _upstream: upstream,
-    }
+    Harness { proxy, upstream }
 }
 
 async fn get_json(url: &str) -> (StatusCode, HeaderMap, Value) {
@@ -370,4 +371,49 @@ async fn preserves_multiple_set_cookie_headers() {
     assert_eq!(cookies.len(), 2);
     assert_eq!(cookies[0].to_str().unwrap(), "a=1; Path=/");
     assert_eq!(cookies[1].to_str().unwrap(), "b=2; Path=/");
+}
+
+#[tokio::test]
+async fn serves_instructions_at_root() {
+    let harness = harness().await;
+    let response = reqwest::get(format!("{}/", harness.proxy)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/plain; charset=utf-8")
+    );
+
+    let body = response.text().await.unwrap();
+    assert!(body.contains("bitwarden-proxy"));
+    assert!(body.contains(PROXY_ORIGIN));
+    assert!(body.contains(&harness.upstream));
+    assert!(body.contains("Self-hosted"));
+}
+
+#[tokio::test]
+async fn root_returns_404_when_disabled() {
+    let harness = harness_with_root_page(false).await;
+    let response = reqwest::get(format!("{}/", harness.proxy)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // The request was answered locally, not forwarded to the upstream, which
+    // would have replied "unknown upstream path".
+    assert_eq!(response.text().await.unwrap(), "not found\n");
+}
+
+#[tokio::test]
+async fn root_rejects_non_get_methods() {
+    let harness = harness().await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/", harness.proxy))
+        .body("nope")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }

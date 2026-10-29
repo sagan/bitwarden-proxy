@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = Config::new(&cli.server, &cli.proxy, &cli.bind)?;
+    let config = Config::new(&cli.server, &cli.proxy, &cli.bind, cli.root_page)?;
     let state = AppState::new(&config)?;
 
     let listener = TcpListener::bind(config.bind)
@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
         bind = %config.bind,
         server = %config.server.description(),
         proxy = %config.proxy_url,
+        root_page = config.root_page,
         "bitwarden-proxy listening"
     );
 

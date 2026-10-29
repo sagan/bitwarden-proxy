@@ -18,6 +18,7 @@ use clap::Parser;
         BITWARDEN_SERVER       Upstream server (same as --server)\n  \
         BITWARDEN_PROXY        Public origin of this proxy (same as --proxy)\n  \
         BITWARDEN_PROXY_BIND   Listen address (same as --bind)\n  \
+        BITWARDEN_PROXY_ROOT_PAGE  Serve the root landing page (same as --root-page)\n  \
         RUST_LOG               Log filter, e.g. `info` or `bitwarden_proxy=debug`\n\n\
         Flags take precedence over environment variables."
 )]
@@ -37,9 +38,20 @@ pub struct Cli {
         long,
         env = "BITWARDEN_PROXY_BIND",
         value_name = "ADDR",
-        default_value = "0.0.0.0:8080"
+        default_value = "0.0.0.0:6680"
     )]
     pub bind: String,
+
+    /// Serve a plain-text instructions page at `/` instead of forwarding it
+    #[arg(
+        long,
+        env = "BITWARDEN_PROXY_ROOT_PAGE",
+        value_name = "BOOL",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub root_page: bool,
 }
 
 #[cfg(test)]
@@ -62,6 +74,7 @@ mod tests {
         assert_eq!(cli.server, "bitwarden.eu");
         assert_eq!(cli.proxy, "https://bw.example.com");
         assert_eq!(cli.bind, "127.0.0.1:9000");
+        assert!(cli.root_page);
     }
 
     #[test]
@@ -76,7 +89,24 @@ mod tests {
         .unwrap();
 
         assert_eq!(cli.server, "bitwarden.com");
-        assert_eq!(cli.bind, "0.0.0.0:8080");
+        assert_eq!(cli.bind, "0.0.0.0:6680");
+        assert!(cli.root_page);
+    }
+
+    #[test]
+    fn can_disable_root_page() {
+        let cli = Cli::try_parse_from([
+            "bitwarden-proxy",
+            "--server",
+            "bitwarden.com",
+            "--proxy",
+            "https://bw.example.com",
+            "--root-page",
+            "false",
+        ])
+        .unwrap();
+
+        assert!(!cli.root_page);
     }
 
     #[test]

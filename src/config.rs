@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::routes::Upstream;
 
-/// Runtime configuration, read from the environment.
+/// Runtime configuration, built from command-line flags or environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The Bitwarden server requests are forwarded to.
@@ -16,16 +16,20 @@ pub struct Config {
     pub proxy_url: String,
     /// Address the HTTP server listens on.
     pub bind: SocketAddr,
+    /// Whether `/` serves the plain-text landing page. When disabled, `/`
+    /// returns 404 instead of being forwarded upstream.
+    pub root_page: bool,
 }
 
 impl Config {
-    pub fn new(server: &str, proxy: &str, bind: &str) -> Result<Self> {
+    pub fn new(server: &str, proxy: &str, bind: &str, root_page: bool) -> Result<Self> {
         Ok(Self {
             server: Upstream::parse(server)?,
             proxy_url: normalize_proxy_url(proxy)?,
             bind: bind.parse().with_context(|| {
                 format!("BITWARDEN_PROXY_BIND is not a valid socket address: {bind:?}")
             })?,
+            root_page,
         })
     }
 }
@@ -75,8 +79,8 @@ mod tests {
             "https://bw.example.com"
         );
         assert_eq!(
-            normalize_proxy_url("http://127.0.0.1:8080").unwrap(),
-            "http://127.0.0.1:8080"
+            normalize_proxy_url("http://127.0.0.1:6680").unwrap(),
+            "http://127.0.0.1:6680"
         );
         assert_eq!(
             normalize_proxy_url("https://bw.example.com:443").unwrap(),
@@ -94,10 +98,16 @@ mod tests {
 
     #[test]
     fn parses_full_config() {
-        let config =
-            Config::new("bitwarden.eu", "https://bw.example.com", "127.0.0.1:1234").unwrap();
+        let config = Config::new(
+            "bitwarden.eu",
+            "https://bw.example.com",
+            "127.0.0.1:1234",
+            true,
+        )
+        .unwrap();
         assert!(config.server.is_official());
         assert_eq!(config.proxy_url, "https://bw.example.com");
         assert_eq!(config.bind.port(), 1234);
+        assert!(config.root_page);
     }
 }

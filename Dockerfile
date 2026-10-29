@@ -12,7 +12,7 @@ RUN useradd --system --uid 10001 --create-home bitwarden-proxy
 COPY --from=builder /app/target/release/bitwarden-proxy /usr/local/bin/bitwarden-proxy
 
 USER bitwarden-proxy
-EXPOSE 8080
-ENV BITWARDEN_PROXY_BIND=0.0.0.0:8080
+EXPOSE 6680
+ENV BITWARDEN_PROXY_BIND=0.0.0.0:6680
 
 ENTRYPOINT ["/usr/local/bin/bitwarden-proxy"]

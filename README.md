@@ -22,16 +22,23 @@ Bitwarden client ──HTTPS──> nginx/traefik ──HTTP──> bitwarden-pr
 
 The proxy mimics the layout of a self-hosted Bitwarden installation:
 
-| Public path              | Official upstream (US)                     |
-| ------------------------ | ------------------------------------------ |
-| `/api/...`               | `https://api.bitwarden.com/...`            |
-| `/identity/...`          | `https://identity.bitwarden.com/...`       |
-| `/notifications/...`     | `https://notifications.bitwarden.com/...`  |
-| `/events/...`            | `https://events.bitwarden.com/...`         |
-| `/sso/...`               | `https://sso.bitwarden.com/...`            |
-| `/fillassist/...`        | `https://fillassist.bitwarden.com/...`     |
-| `/icons/...`             | `https://icons.bitwarden.net/...`          |
-| anything else            | `https://bitwarden.com/...`                |
+| Public path          | Official upstream (US)                    |
+| -------------------- | ----------------------------------------- |
+| `/api/...`           | `https://api.bitwarden.com/...`           |
+| `/identity/...`      | `https://identity.bitwarden.com/...`      |
+| `/notifications/...` | `https://notifications.bitwarden.com/...` |
+| `/events/...`        | `https://events.bitwarden.com/...`        |
+| `/sso/...`           | `https://sso.bitwarden.com/...`           |
+| `/fillassist/...`    | `https://fillassist.bitwarden.com/...`    |
+| `/icons/...`         | `https://icons.bitwarden.net/...`         |
+| `/`                  | local instructions page (not forwarded)   |
+| anything else        | `https://bitwarden.com/...`               |
+
+Opening `/` in a browser shows a plain-text page with setup instructions and
+the active configuration (upstream server, public origin, listen address).
+Disable it with `--root-page false` or `BITWARDEN_PROXY_ROOT_PAGE=false`; `/`
+then answers `404 Not Found` locally. The root path is never forwarded
+upstream, so the Bitwarden web vault is not available at `/`.
 
 `bitwarden.eu` is handled the same way with the `.eu` domains. For any other
 server (`BITWARDEN_SERVER=https://bw.example.com`) paths are forwarded
@@ -42,10 +49,10 @@ unchanged, so Vaultwarden and self-hosted Bitwarden work too.
 Only these responses are touched (and only when the upstream returns `2xx` with
 a JSON content type):
 
-| Path                     | Fields set to `true`                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `/api/accounts/profile`  | `premium`, `premiumFromOrganization`, `organizations[*].usersGetPremium`, `organizationsNew[*].usersGetPremium` |
-| `/api/sync`              | `profile.premium`, `profile.premiumFromOrganization`                                                   |
+| Path                    | Fields set to `true`                                                                                            |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `/api/accounts/profile` | `premium`, `premiumFromOrganization`, `organizations[*].usersGetPremium`, `organizationsNew[*].usersGetPremium` |
+| `/api/sync`             | `profile.premium`, `profile.premiumFromOrganization`                                                            |
 
 `/api/config` is rewritten so the client keeps talking to the proxy:
 
@@ -76,12 +83,13 @@ Every setting can be given as a command-line flag or through an environment
 variable. Flags take precedence over environment variables. Run
 `bitwarden-proxy --help` to list everything as well.
 
-| Flag             | Environment variable   | Required | Description                                                                                        |
-| ---------------- | ---------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `-s, --server`   | `BITWARDEN_SERVER`     | yes      | Upstream server: `bitwarden.com`, `bitwarden.eu`, `https://bw.example.com`, `http://host:port`, ... |
-| `-p, --proxy`    | `BITWARDEN_PROXY`      | yes      | Public origin of this proxy, used in `/api/config`: `https://bitwarden-proxy.example.com`           |
-| `-b, --bind`     | `BITWARDEN_PROXY_BIND` | no       | Listen address, default `0.0.0.0:8080`                                                             |
-|                  | `RUST_LOG`             | no       | Log filter, e.g. `info`, `debug`, `bitwarden_proxy=debug`                                          |
+| Flag           | Environment variable        | Required | Description                                                                                         |
+| -------------- | --------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `-s, --server` | `BITWARDEN_SERVER`          | yes      | Upstream server: `bitwarden.com`, `bitwarden.eu`, `https://bw.example.com`, `http://host:port`, ... |
+| `-p, --proxy`  | `BITWARDEN_PROXY`           | yes      | Public origin of this proxy, used in `/api/config`: `https://bitwarden-proxy.example.com`           |
+| `-b, --bind`   | `BITWARDEN_PROXY_BIND`      | no       | Listen address, default `0.0.0.0:6680`                                                              |
+| `--root-page`  | `BITWARDEN_PROXY_ROOT_PAGE` | no       | Serve the plain-text landing page at `/`, default `true`                                            |
+|                | `RUST_LOG`                  | no       | Log filter, e.g. `info`, `debug`, `bitwarden_proxy=debug`                                           |
 
 `--proxy` must be an origin only: no path, query, fragment or credentials. It
 is the URL users enter in their Bitwarden client, so it must match the public
@@ -98,7 +106,7 @@ cargo run --release -- \
 ```
 
 ```sh
-./bitwarden-proxy -s bitwarden.eu -p https://bitwarden-proxy.example.com -b 0.0.0.0:8080
+./bitwarden-proxy -s bitwarden.eu -p https://bitwarden-proxy.example.com -b 0.0.0.0:6680
 ```
 
 ### Environment variables
@@ -116,14 +124,14 @@ docker build -t bitwarden-proxy .
 
 # With environment variables
 docker run -d --name bitwarden-proxy --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:6680:6680 \
   -e BITWARDEN_SERVER=bitwarden.com \
   -e BITWARDEN_PROXY=https://bitwarden-proxy.example.com \
   bitwarden-proxy
 
 # Or with command-line flags
 docker run -d --name bitwarden-proxy --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:6680:6680 \
   bitwarden-proxy --server bitwarden.com --proxy https://bitwarden-proxy.example.com
 ```
 
@@ -143,7 +151,7 @@ server {
     client_max_body_size 100m;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:6680;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -180,7 +188,7 @@ http:
     bitwarden-proxy:
       loadBalancer:
         servers:
-          - url: http://bitwarden-proxy:8080
+          - url: http://bitwarden-proxy:6680
 ```
 
 Traefik forwards WebSocket upgrades automatically.

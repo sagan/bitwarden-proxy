@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header, HeaderMap, Request, StatusCode};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use bytes::Bytes;
@@ -14,6 +14,7 @@ use futures_util::{Stream, StreamExt};
 use tracing::{debug, warn};
 
 use crate::config::Config;
+use crate::landing;
 use crate::rewrite::{config_rules, profile_rules, sync_rules, JsonRewriter, RuleSet};
 use crate::routes::Upstream;
 use crate::ws;
@@ -25,6 +26,8 @@ pub struct AppState {
     config_rules: Arc<RuleSet>,
     profile_rules: Arc<RuleSet>,
     sync_rules: Arc<RuleSet>,
+    /// Pre-rendered landing page, or `None` when it is disabled.
+    landing: Option<String>,
 }
 
 impl AppState {
@@ -44,6 +47,7 @@ impl AppState {
             config_rules: Arc::new(config_rules(&config.proxy_url)),
             profile_rules: Arc::new(profile_rules()),
             sync_rules: Arc::new(sync_rules()),
+            landing: config.root_page.then(|| landing::render(config)),
         }))
     }
 }
@@ -54,10 +58,36 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 async fn handle(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
+    if req.uri().path() == "/" {
+        return root_response(&state, req.method());
+    }
     if ws::is_websocket_upgrade(req.headers()) {
         return ws::proxy(state, req).await;
     }
     proxy_http(state, req).await
+}
+
+/// `/` is never proxied: it either serves the instructions page or a 404,
+/// depending on `BITWARDEN_PROXY_ROOT_PAGE` / `--root-page`.
+fn root_response(state: &AppState, method: &Method) -> Response {
+    let Some(page) = &state.landing else {
+        return plain_error(StatusCode::NOT_FOUND, "not found");
+    };
+
+    if method != Method::GET && method != Method::HEAD {
+        let mut response = plain_error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed");
+        response
+            .headers_mut()
+            .insert(header::ALLOW, header::HeaderValue::from_static("GET, HEAD"));
+        return response;
+    }
+
+    let mut response = Response::new(Body::from(page.clone()));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    response
 }
 
 async fn proxy_http(state: Arc<AppState>, req: Request<Body>) -> Response {
