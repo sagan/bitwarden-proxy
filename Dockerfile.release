@@ -1,0 +1,23 @@
+# Release image used by the GitHub Actions workflow.
+#
+# The image is assembled from the statically linked musl binaries built in
+# the `build` job. Before building, the workflow places them in the build
+# context as:
+#
+#   docker-context/bitwarden-proxy-linux-amd64
+#   docker-context/bitwarden-proxy-linux-arm64
+#
+# Build with:
+#   docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.release .
+FROM scratch
+
+ARG TARGETARCH
+COPY docker-context/bitwarden-proxy-linux-${TARGETARCH} /usr/local/bin/bitwarden-proxy
+
+# Static binary, bundled webpki roots and a numeric user: no libc, shell or
+# CA bundle is needed in the final image.
+USER 10001:10001
+ENV BITWARDEN_PROXY_BIND=0.0.0.0:6680
+EXPOSE 6680
+
+ENTRYPOINT ["/usr/local/bin/bitwarden-proxy"]

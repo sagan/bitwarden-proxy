@@ -119,6 +119,25 @@ cargo run --release
 
 ### Docker
 
+Multi-arch images (`linux/amd64` and `linux/arm64`) are published to GitHub
+Container Registry on every release tag:
+
+```sh
+docker run -d --name bitwarden-proxy --restart unless-stopped \
+  -p 127.0.0.1:6680:6680 \
+  -e BITWARDEN_SERVER=bitwarden.com \
+  -e BITWARDEN_PROXY=https://bitwarden-proxy.example.com \
+  ghcr.io/OWNER/bitwarden-proxy:latest
+```
+
+Replace `OWNER` with the GitHub user or organization. The exact version tag
+(e.g. `0.1.0`) is pushed for every release, while `0.1` and `latest` are only
+updated for stable (non-prerelease) tags. New packages are private by default —
+change the visibility in the package settings if you want to pull them
+anonymously.
+
+To build the image from source instead:
+
 ```sh
 docker build -t bitwarden-proxy .
 
@@ -134,6 +153,10 @@ docker run -d --name bitwarden-proxy --restart unless-stopped \
   -p 127.0.0.1:6680:6680 \
   bitwarden-proxy --server bitwarden.com --proxy https://bitwarden-proxy.example.com
 ```
+
+> The published image is built from `Dockerfile.release`, which packages the
+> statically linked musl binary on a `scratch` base. The source-build `Dockerfile`
+> is retained for local builds.
 
 ### Behind nginx
 
@@ -245,6 +268,11 @@ cargo clippy --all-targets -- -D warnings
 Tests include unit tests for the rewriter and routing, plus end-to-end tests
 with a fake Bitwarden upstream (including chunk-boundary splitting and a
 WebSocket echo).
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It tests the code,
+builds the two musl binaries, publishes them (plus `SHA256SUMS`) as GitHub
+Release assets, and pushes a multi-arch container image to
+`ghcr.io/<owner>/<repository>`.
 
 ## Disclaimer
 
