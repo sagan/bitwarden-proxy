@@ -25,14 +25,21 @@ struct Frame {
     kind: FrameKind,
     key: Option<String>,
     index: usize,
+    /// Number of members written to this object so far.
+    members: usize,
+    /// Members that are still missing from this object and must be appended
+    /// just before it closes.
+    append: Option<Vec<(String, bool)>>,
 }
 
 impl Frame {
-    fn object() -> Self {
+    fn object(append: Option<Vec<(String, bool)>>) -> Self {
         Frame {
             kind: FrameKind::Object,
             key: None,
             index: 0,
+            members: 0,
+            append,
         }
     }
 
@@ -41,6 +48,8 @@ impl Frame {
             kind: FrameKind::Array,
             key: None,
             index: 0,
+            members: 0,
+            append: None,
         }
     }
 }
@@ -149,8 +158,7 @@ impl JsonRewriter {
                         self.state = State::KeyString;
                         i += 1;
                     } else if byte == b'}' {
-                        out.push(byte);
-                        self.close_frame();
+                        self.close_object(out);
                         i += 1;
                     } else {
                         self.bail(out, input, i);
@@ -182,8 +190,7 @@ impl JsonRewriter {
                         self.state = State::ObjectKey;
                         i += 1;
                     } else if byte == b'}' {
-                        out.push(byte);
-                        self.close_frame();
+                        self.close_object(out);
                         i += 1;
                     } else {
                         self.bail(out, input, i);
@@ -222,6 +229,11 @@ impl JsonRewriter {
                         out.push(byte);
                         let key = decode_key(&self.token);
                         if let Some(frame) = self.stack.last_mut() {
+                            // The upstream already provides this member, so it
+                            // must not be appended again.
+                            if let Some(pending) = &mut frame.append {
+                                pending.retain(|(name, _)| name != &key);
+                            }
                             frame.key = Some(key);
                         }
                         self.token.clear();
@@ -273,15 +285,15 @@ impl JsonRewriter {
 
                     match self.token.as_slice() {
                         b"true" => {
-                            self.emit_literal(true, out);
+                            self.emit_literal(b"true", out);
                             self.after_value();
                         }
                         b"false" => {
-                            self.emit_literal(false, out);
+                            self.emit_literal(b"false", out);
                             self.after_value();
                         }
                         b"null" => {
-                            out.extend_from_slice(b"null");
+                            self.emit_literal(b"null", out);
                             self.after_value();
                         }
                         token if is_literal_prefix(token) => {
@@ -314,7 +326,8 @@ impl JsonRewriter {
         match byte {
             b'{' => {
                 out.push(byte);
-                self.stack.push(Frame::object());
+                let append = self.find_appends();
+                self.stack.push(Frame::object(append));
                 self.state = State::ObjectKey;
                 true
             }
@@ -371,17 +384,14 @@ impl JsonRewriter {
         self.after_value();
     }
 
-    fn emit_literal(&mut self, value: bool, out: &mut Vec<u8>) {
-        match self.find_action(|action| matches!(action, Action::SetBool(_))) {
-            Some(index) => {
-                if let Action::SetBool(replacement) = &self.rules.rules()[index].action {
-                    out.extend_from_slice(if *replacement { b"true" } else { b"false" });
-                    return;
-                }
-                out.extend_from_slice(if value { b"true" } else { b"false" });
+    fn emit_literal(&mut self, default: &[u8], out: &mut Vec<u8>) {
+        if let Some(index) = self.find_action(|action| matches!(action, Action::SetBool(_))) {
+            if let Action::SetBool(replacement) = &self.rules.rules()[index].action {
+                out.extend_from_slice(if *replacement { b"true" } else { b"false" });
+                return;
             }
-            None => out.extend_from_slice(if value { b"true" } else { b"false" }),
         }
+        out.extend_from_slice(default);
     }
 
     /// Find a rule matching the current path whose action satisfies `filter`.
@@ -396,6 +406,38 @@ impl JsonRewriter {
         None
     }
 
+    /// Find entries to append to the object that is about to be opened.
+    fn find_appends(&self) -> Option<Vec<(String, bool)>> {
+        let depth = self.stack.len();
+        for &index in self.rules.append_candidates(depth) {
+            let append = &self.rules.appends()[index];
+            if path_matches(&append.path, &self.stack) {
+                return Some(append.entries.clone());
+            }
+        }
+        None
+    }
+
+    /// Emit `}`, preceded by any configured members the upstream omitted.
+    fn close_object(&mut self, out: &mut Vec<u8>) {
+        if let Some(frame) = self.stack.last() {
+            if let Some(pending) = &frame.append {
+                for (index, (name, value)) in pending.iter().enumerate() {
+                    if frame.members > 0 || index > 0 {
+                        out.push(b',');
+                    }
+                    out.push(b'"');
+                    escape_into(name, out);
+                    out.push(b'"');
+                    out.push(b':');
+                    out.extend_from_slice(if *value { b"true" } else { b"false" });
+                }
+            }
+        }
+        out.push(b'}');
+        self.close_frame();
+    }
+
     fn after_value(&mut self) {
         match self.stack.last_mut() {
             None => self.state = State::Done,
@@ -404,7 +446,10 @@ impl JsonRewriter {
                     frame.index += 1;
                     self.state = State::ArrayComma;
                 }
-                FrameKind::Object => self.state = State::ObjectComma,
+                FrameKind::Object => {
+                    frame.members += 1;
+                    self.state = State::ObjectComma;
+                }
             },
         }
     }

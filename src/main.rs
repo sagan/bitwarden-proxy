@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use bitwarden_proxy::{router, AppState, Cli, Config};
+use bitwarden_proxy::{features, router, AppState, Cli, Config};
 use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
@@ -16,7 +16,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = Config::new(&cli.server, &cli.proxy, &cli.bind, cli.root_page)?;
+    let env = std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)));
+    let features = features::collect(env, &cli.feature)?;
+    let config =
+        Config::new(&cli.server, &cli.proxy, &cli.bind, cli.root_page)?.with_features(features);
     let state = AppState::new(&config)?;
 
     let listener = TcpListener::bind(config.bind)
@@ -28,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         server = %config.server.description(),
         proxy = %config.proxy_url,
         root_page = config.root_page,
+        feature_overrides = config.features.len(),
         "bitwarden-proxy listening"
     );
 

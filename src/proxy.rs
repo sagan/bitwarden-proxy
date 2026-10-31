@@ -44,7 +44,7 @@ impl AppState {
         Ok(Arc::new(Self {
             client,
             upstream: config.server.clone(),
-            config_rules: Arc::new(config_rules(&config.proxy_url)),
+            config_rules: Arc::new(config_rules(&config.proxy_url, &config.features)),
             profile_rules: Arc::new(profile_rules()),
             sync_rules: Arc::new(sync_rules()),
             landing: config.root_page.then(|| landing::render(config)),

@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context, Result};
 use url::Url;
 
+use crate::features::FeatureMap;
 use crate::routes::Upstream;
 
 /// Runtime configuration, built from command-line flags or environment variables.
@@ -19,6 +20,8 @@ pub struct Config {
     /// Whether `/` serves the plain-text landing page. When disabled, `/`
     /// returns 404 instead of being forwarded upstream.
     pub root_page: bool,
+    /// Overrides for the `featureStates` object in `/api/config`.
+    pub features: FeatureMap,
 }
 
 impl Config {
@@ -30,7 +33,15 @@ impl Config {
                 format!("BITWARDEN_PROXY_BIND is not a valid socket address: {bind:?}")
             })?,
             root_page,
+            features: FeatureMap::new(),
         })
+    }
+
+    /// Attach `/api/config` feature flag overrides.
+    #[must_use]
+    pub fn with_features(mut self, features: FeatureMap) -> Self {
+        self.features = features;
+        self
     }
 }
 

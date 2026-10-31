@@ -7,6 +7,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod features;
 pub mod landing;
 pub mod proxy;
 pub mod rewrite;

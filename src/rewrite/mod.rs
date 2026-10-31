@@ -3,11 +3,12 @@
 mod rules;
 mod stream;
 
-pub use rules::{config_rules, profile_rules, sync_rules, Action, Rule, RuleSet, Segment};
+pub use rules::{config_rules, profile_rules, sync_rules, Action, Append, Rule, RuleSet, Segment};
 pub use stream::JsonRewriter;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use serde_json::Value;
@@ -107,7 +108,7 @@ mod tests {
     "fillAssistRules": "https://fillassist.bitwarden.com"
   }
 }"#;
-        let rules = config_rules("https://bw.example.com");
+        let rules = config_rules("https://bw.example.com", &BTreeMap::new());
         let output = run_all_chunkings(&rules, input);
         let value = json(&output);
 
@@ -135,7 +136,10 @@ mod tests {
         let input = "{\n  \"environment\": { \"api\": \"https://api.bitwarden.com\" }\n}";
         let expected = "{\n  \"environment\": { \"api\": \"https://bw.example.com/api\" }\n}";
         assert_eq!(
-            run_all_chunkings(&config_rules("https://bw.example.com"), input),
+            run_all_chunkings(
+                &config_rules("https://bw.example.com", &BTreeMap::new()),
+                input
+            ),
             expected
         );
     }
@@ -207,7 +211,9 @@ mod tests {
             "mixed",
             [
                 rules.rules().to_vec(),
-                config_rules("https://bw.example.com").rules().to_vec(),
+                config_rules("https://bw.example.com", &BTreeMap::new())
+                    .rules()
+                    .to_vec(),
             ]
             .concat(),
         );
@@ -221,5 +227,105 @@ mod tests {
         let rules = RuleSet::new("empty", Vec::new());
         let input = r#"{"premium":false}"#;
         assert_eq!(run_all_chunkings(&rules, input), input);
+    }
+
+    fn features(pairs: &[(&str, bool)]) -> BTreeMap<String, bool> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), *value))
+            .collect()
+    }
+
+    #[test]
+    fn rewrites_and_appends_feature_states() {
+        let features = features(&[
+            ("enable-basic-auth-response", true),
+            ("pm-35803-browser-auto-confirm-log-in", false),
+        ]);
+        let input = r#"{
+  "version": "2026.10.1",
+  "featureStates": {
+    "pm-35803-browser-auto-confirm-log-in": true,
+    "pm-34145-policies-in-accepted-state": true
+  }
+}"#;
+        let rules = config_rules("https://bw.example.com", &features);
+        let value = json(&run_all_chunkings(&rules, input));
+
+        // Existing flags are overridden...
+        assert_eq!(
+            value["featureStates"]["pm-35803-browser-auto-confirm-log-in"],
+            false
+        );
+        // ...untouched flags keep their upstream value...
+        assert_eq!(
+            value["featureStates"]["pm-34145-policies-in-accepted-state"],
+            true
+        );
+        // ...and missing flags are appended.
+        assert_eq!(value["featureStates"]["enable-basic-auth-response"], true);
+        assert_eq!(value["version"], "2026.10.1");
+    }
+
+    #[test]
+    fn appends_to_empty_feature_states_object() {
+        let features = features(&[("a", true), ("b", false)]);
+        let output = run_all_chunkings(
+            &config_rules("https://x", &features),
+            r#"{"featureStates": { }}"#,
+        );
+        let value = json(&output);
+
+        assert_eq!(value["featureStates"]["a"], true);
+        assert_eq!(value["featureStates"]["b"], false);
+        assert_eq!(value["featureStates"].as_object().unwrap().len(), 2);
+        assert!(!output.contains("{,"));
+    }
+
+    #[test]
+    fn appends_after_whitespace_before_closing_brace() {
+        let features = features(&[("x", true)]);
+        let input = "{\"featureStates\": {\n  \"a\": false\n  }}";
+        let value = json(&run_all_chunkings(
+            &config_rules("https://x", &features),
+            input,
+        ));
+
+        assert_eq!(value["featureStates"]["a"], false);
+        assert_eq!(value["featureStates"]["x"], true);
+    }
+
+    #[test]
+    fn replaces_null_feature_values() {
+        let features = features(&[("x", true)]);
+        let output = run_all_chunkings(
+            &config_rules("https://x", &features),
+            r#"{"featureStates":{"x":null}}"#,
+        );
+        assert_eq!(json(&output)["featureStates"]["x"], true);
+    }
+
+    #[test]
+    fn missing_feature_states_object_is_left_alone() {
+        let features = features(&[("x", true)]);
+        let input = r#"{"version":"1"}"#;
+        assert_eq!(
+            run_all_chunkings(&config_rules("https://x", &features), input),
+            input
+        );
+    }
+
+    #[test]
+    fn all_present_feature_states_are_not_duplicated() {
+        let features = features(&[("a", true), ("b", false)]);
+        let input = r#"{"featureStates":{"a":false,"b":true}}"#;
+        let value = json(&run_all_chunkings(
+            &config_rules("https://x", &features),
+            input,
+        ));
+
+        assert_eq!(value["featureStates"]["a"], true);
+        assert_eq!(value["featureStates"]["b"], false);
+        assert_eq!(value["featureStates"].as_object().unwrap().len(), 2);
     }
 }

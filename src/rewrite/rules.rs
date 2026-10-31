@@ -1,5 +1,7 @@
 //! Rules describing which JSON fields the proxy rewrites.
 
+use std::collections::BTreeMap;
+
 /// One segment of a JSON path.
 ///
 /// A path is a sequence of object keys and array indices, e.g.
@@ -33,18 +35,34 @@ pub struct Rule {
     pub action: Action,
 }
 
+/// Members to add to an object if the upstream response does not contain them.
+///
+/// `entries` are appended just before the object's closing `}`, keeping the
+/// whole rewrite streaming (the object is never buffered).
+#[derive(Debug, Clone)]
+pub struct Append {
+    pub path: Vec<Segment>,
+    pub entries: Vec<(String, bool)>,
+}
+
 /// A named set of rewrite rules.
 #[derive(Debug, Clone)]
 pub struct RuleSet {
     name: &'static str,
     rules: Vec<Rule>,
+    appends: Vec<Append>,
     /// Rule indices grouped by path length so lookups stay cheap even for
     /// multi-megabyte responses.
     by_depth: Vec<Vec<usize>>,
+    appends_by_depth: Vec<Vec<usize>>,
 }
 
 impl RuleSet {
     pub fn new(name: &'static str, rules: Vec<Rule>) -> Self {
+        Self::with_appends(name, rules, Vec::new())
+    }
+
+    pub fn with_appends(name: &'static str, rules: Vec<Rule>, appends: Vec<Append>) -> Self {
         let mut by_depth: Vec<Vec<usize>> = Vec::new();
         for (index, rule) in rules.iter().enumerate() {
             if by_depth.len() <= rule.path.len() {
@@ -52,10 +70,21 @@ impl RuleSet {
             }
             by_depth[rule.path.len()].push(index);
         }
+
+        let mut appends_by_depth: Vec<Vec<usize>> = Vec::new();
+        for (index, append) in appends.iter().enumerate() {
+            if appends_by_depth.len() <= append.path.len() {
+                appends_by_depth.resize_with(append.path.len() + 1, Vec::new);
+            }
+            appends_by_depth[append.path.len()].push(index);
+        }
+
         Self {
             name,
             rules,
+            appends,
             by_depth,
+            appends_by_depth,
         }
     }
 
@@ -67,8 +96,19 @@ impl RuleSet {
         &self.rules
     }
 
+    pub fn appends(&self) -> &[Append] {
+        &self.appends
+    }
+
     pub(crate) fn candidates(&self, depth: usize) -> &[usize] {
         self.by_depth
+            .get(depth)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn append_candidates(&self, depth: usize) -> &[usize] {
+        self.appends_by_depth
             .get(depth)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
@@ -83,8 +123,9 @@ fn bool_rule(path: &[Segment], value: bool) -> Rule {
 }
 
 /// Rules for `GET /api/config`: point every advertised service URL back at the
-/// proxy, exactly like a self-hosted Bitwarden server would.
-pub fn config_rules(proxy_url: &str) -> RuleSet {
+/// proxy, exactly like a self-hosted Bitwarden server would, and apply the
+/// configured `featureStates` overrides.
+pub fn config_rules(proxy_url: &str, features: &BTreeMap<String, bool>) -> RuleSet {
     let base = proxy_url.trim_end_matches('/');
     let services = [
         ("vault", ""),
@@ -96,7 +137,7 @@ pub fn config_rules(proxy_url: &str) -> RuleSet {
         ("fillAssistRules", "/fillassist"),
     ];
 
-    let rules = services
+    let mut rules: Vec<Rule> = services
         .into_iter()
         .map(|(field, suffix)| Rule {
             path: vec![Segment::key("environment"), Segment::key(field)],
@@ -104,7 +145,26 @@ pub fn config_rules(proxy_url: &str) -> RuleSet {
         })
         .collect();
 
-    RuleSet::new("config", rules)
+    for (name, value) in features {
+        rules.push(bool_rule(
+            &[Segment::key("featureStates"), Segment::key(name)],
+            *value,
+        ));
+    }
+
+    let appends = if features.is_empty() {
+        Vec::new()
+    } else {
+        vec![Append {
+            path: vec![Segment::key("featureStates")],
+            entries: features
+                .iter()
+                .map(|(name, value)| (name.clone(), *value))
+                .collect(),
+        }]
+    };
+
+    RuleSet::with_appends("config", rules, appends)
 }
 
 /// Rules for `GET /api/accounts/profile`.

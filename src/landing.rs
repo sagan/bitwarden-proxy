@@ -4,6 +4,16 @@ use crate::config::Config;
 
 /// Render the instructions / configuration summary shown at the proxy root.
 pub fn render(config: &Config) -> String {
+    let feature_overrides = if config.features.is_empty() {
+        String::new()
+    } else {
+        let mut out = String::from("\nFeature overrides\n-----------------\n");
+        for (name, value) in &config.features {
+            out.push_str(&format!("  {name} = {value}\n"));
+        }
+        out
+    };
+
     format!(
         "\
 bitwarden-proxy {version}
@@ -26,7 +36,7 @@ Configuration
   public origin   : {proxy}
   listen address  : {bind}
   root page       : enabled
-
+{feature_overrides}
 Notes
 -----
   * Log out and back in after changing the server URL.
@@ -41,6 +51,7 @@ Notes
         proxy = config.proxy_url,
         upstream = config.server.description(),
         bind = config.bind,
+        feature_overrides = feature_overrides,
     )
 }
 
@@ -63,5 +74,27 @@ mod tests {
         assert!(page.contains("https://bw.example.com"));
         assert!(page.contains("official (bitwarden.eu)"));
         assert!(page.contains("0.0.0.0:6680"));
+        assert!(!page.contains("Feature overrides"));
+    }
+
+    #[test]
+    fn lists_feature_overrides() {
+        let features = std::collections::BTreeMap::from([
+            ("enable-basic-auth-response".to_owned(), true),
+            ("pm-34145-policies".to_owned(), false),
+        ]);
+        let config = Config::new(
+            "bitwarden.eu",
+            "https://bw.example.com",
+            "0.0.0.0:6680",
+            true,
+        )
+        .unwrap()
+        .with_features(features);
+        let page = render(&config);
+
+        assert!(page.contains("Feature overrides"));
+        assert!(page.contains("enable-basic-auth-response = true"));
+        assert!(page.contains("pm-34145-policies = false"));
     }
 }

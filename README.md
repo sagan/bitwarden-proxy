@@ -70,7 +70,31 @@ a JSON content type):
 ```
 
 Every other byte — including all other fields and the original formatting — is
-copied through untouched.
+copied through untouched. When feature overrides are configured, missing
+`featureStates` members are appended just before the object's closing brace.
+
+#### Feature flags
+
+Any boolean in the `/api/config` `featureStates` object can be overridden, and
+keys that the upstream server does not return are appended:
+
+```sh
+bitwarden-proxy ... \
+  --feature "enable-basic-auth-response=true" \
+  --feature "pm-34145-policies-in-accepted-state=false"
+```
+
+The same overrides can be set with environment variables. The suffix is
+lowercased and underscores become hyphens:
+
+```sh
+BITWARDEN_PROXY_FEATURE_ENABLE_BASIC_AUTH_RESPONSE=true
+BITWARDEN_PROXY_FEATURE_PM_34145_POLICIES_IN_ACCEPTED_STATE=false
+```
+
+`--feature` takes precedence over the environment variable for the same key.
+Values must be booleans: `true`/`false` (`1`/`0` and `yes`/`no` are also
+accepted).
 
 The rewriting is done by an incremental state machine while the response body
 flows through: a multi-megabyte `/api/sync` response is never buffered in full.
@@ -89,6 +113,7 @@ variable. Flags take precedence over environment variables. Run
 | `-p, --proxy`  | `BITWARDEN_PROXY`           | yes      | Public origin of this proxy, used in `/api/config`: `https://bitwarden-proxy.example.com`           |
 | `-b, --bind`   | `BITWARDEN_PROXY_BIND`      | no       | Listen address, default `0.0.0.0:6680`                                                              |
 | `--root-page`  | `BITWARDEN_PROXY_ROOT_PAGE` | no       | Serve the plain-text landing page at `/`, default `true`                                            |
+| `--feature`    | `BITWARDEN_PROXY_FEATURE_<NAME>` | no  | Override a `/api/config` `featureStates` value; repeatable (`--feature foo=true`)                   |
 |                | `RUST_LOG`                  | no       | Log filter, e.g. `info`, `debug`, `bitwarden_proxy=debug`                                           |
 
 `--proxy` must be an origin only: no path, query, fragment or credentials. It
@@ -244,6 +269,9 @@ Traefik forwards WebSocket upgrades automatically.
   by Bitwarden itself.
 - Responses with non-2xx status, non-JSON content types or websocket traffic are
   passed through unchanged.
+- Feature overrides are appended only when the upstream `/api/config` response
+  contains a `featureStates` object. If that field is missing (or is not an
+  object), the configured flags are not injected.
 
 ## How it works
 
@@ -252,9 +280,10 @@ Traefik forwards WebSocket upgrades automatically.
 - `src/proxy.rs` forwards requests with `reqwest`, streams responses and wraps
   the selected JSON responses in the rewriter.
 - `src/rewrite/stream.rs` is a byte-level incremental JSON state machine. It
-  tracks the current JSON path, copies all bytes verbatim and swaps only the
-  matched values. It is safe across arbitrary chunk boundaries (tested by
-  re-running every test with every possible chunk size).
+  tracks the current JSON path, copies all bytes verbatim, swaps only the
+  matched values and appends configured members that are missing from an
+  object. It is safe across arbitrary chunk boundaries (tested by re-running
+  every test with every possible chunk size).
 - `src/ws.rs` tunnels WebSocket connections to the upstream notifications
   service.
 

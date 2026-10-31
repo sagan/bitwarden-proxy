@@ -19,6 +19,9 @@ use clap::Parser;
         BITWARDEN_PROXY        Public origin of this proxy (same as --proxy)\n  \
         BITWARDEN_PROXY_BIND   Listen address (same as --bind)\n  \
         BITWARDEN_PROXY_ROOT_PAGE  Serve the root landing page (same as --root-page)\n  \
+        BITWARDEN_PROXY_FEATURE_<NAME>  Override a featureStates flag (same as --feature);\n  \
+        \x20                               underscores become hyphens, e.g.\n  \
+        \x20                               BITWARDEN_PROXY_FEATURE_ENABLE_BASIC_AUTH_RESPONSE=true\n  \
         RUST_LOG               Log filter, e.g. `info` or `bitwarden_proxy=debug`\n\n\
         Flags take precedence over environment variables."
 )]
@@ -52,6 +55,11 @@ pub struct Cli {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub root_page: bool,
+
+    /// Override a featureStates flag in /api/config, e.g.
+    /// `--feature enable-basic-auth-response=true` (repeatable)
+    #[arg(long = "feature", value_name = "KEY=BOOL")]
+    pub feature: Vec<String>,
 }
 
 #[cfg(test)]
@@ -107,6 +115,30 @@ mod tests {
         .unwrap();
 
         assert!(!cli.root_page);
+    }
+
+    #[test]
+    fn collects_repeated_feature_flags() {
+        let cli = Cli::try_parse_from([
+            "bitwarden-proxy",
+            "--server",
+            "bitwarden.com",
+            "--proxy",
+            "https://bw.example.com",
+            "--feature",
+            "enable-basic-auth-response=true",
+            "--feature",
+            "pm-34145-policies-in-accepted-state=false",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.feature,
+            [
+                "enable-basic-auth-response=true",
+                "pm-34145-policies-in-accepted-state=false",
+            ]
+        );
     }
 
     #[test]

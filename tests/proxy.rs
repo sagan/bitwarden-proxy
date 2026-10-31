@@ -29,6 +29,10 @@ const CONFIG_JSON: &str = r#"{
     "notifications": "https://notifications.bitwarden.com",
     "sso": "https://sso.bitwarden.com",
     "fillAssistRules": "https://fillassist.bitwarden.com"
+  },
+  "featureStates": {
+    "pm-35803-browser-auto-confirm-log-in": true,
+    "pm-34145-policies-in-accepted-state": false
   }
 }"#;
 
@@ -176,12 +180,26 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
-    harness_with_root_page(true).await
+    harness_with(true, &[]).await
 }
 
 async fn harness_with_root_page(root_page: bool) -> Harness {
+    harness_with(root_page, &[]).await
+}
+
+async fn harness_with_features(features: &[(&str, bool)]) -> Harness {
+    harness_with(true, features).await
+}
+
+async fn harness_with(root_page: bool, features: &[(&str, bool)]) -> Harness {
     let upstream = spawn(Router::new().fallback(any(upstream))).await;
-    let config = Config::new(&upstream, PROXY_ORIGIN, "127.0.0.1:0", root_page).unwrap();
+    let features = features
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), *value))
+        .collect();
+    let config = Config::new(&upstream, PROXY_ORIGIN, "127.0.0.1:0", root_page)
+        .unwrap()
+        .with_features(features);
     let state = AppState::new(&config).unwrap();
     let proxy = spawn(router(Arc::clone(&state))).await;
     Harness { proxy, upstream }
@@ -213,6 +231,27 @@ async fn rewrites_config() {
     );
     assert_eq!(body["environment"]["cloudRegion"], "US");
     assert_eq!(body["version"], "2026.10.1");
+}
+
+#[tokio::test]
+async fn overrides_feature_states() {
+    let harness = harness_with_features(&[
+        ("pm-35803-browser-auto-confirm-log-in", false),
+        ("enable-basic-auth-response", true),
+    ])
+    .await;
+    let (status, _headers, body) = get_json(&format!("{}/api/config", harness.proxy)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["featureStates"]["pm-35803-browser-auto-confirm-log-in"],
+        false
+    );
+    assert_eq!(
+        body["featureStates"]["pm-34145-policies-in-accepted-state"],
+        false
+    );
+    assert_eq!(body["featureStates"]["enable-basic-auth-response"], true);
 }
 
 #[tokio::test]
